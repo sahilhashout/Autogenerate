@@ -64,7 +64,7 @@ public class GoogleDocPageCreationServiceImpl implements GoogleDocPageCreationSe
             throw new IllegalStateException("jcr:content not found for " + destPath);
         }
 
-        updatePageProperties(contentResource);
+        updatePageProperties(contentResource, metadata);
         updateSections(contentResource, blocks);
 
         resolver.commit();
@@ -253,7 +253,6 @@ public class GoogleDocPageCreationServiceImpl implements GoogleDocPageCreationSe
 
             metadata.put(key, value);
         }
-
         return metadata;
     }
 
@@ -900,7 +899,7 @@ public class GoogleDocPageCreationServiceImpl implements GoogleDocPageCreationSe
         session.getWorkspace().copy(previousChild.getPath(), targetPath);
         session.save();
 
-        // Refresh the resolver so the copied resource and its inherited properties are visible immediately.
+        resolver.commit();
         resolver.refresh();
 
         Resource copiedChild = resolver.getResource(targetPath);
@@ -921,12 +920,46 @@ public class GoogleDocPageCreationServiceImpl implements GoogleDocPageCreationSe
         return pageManager == null ? null : pageManager.getPage(path);
     }
 
-    private void updatePageProperties(Resource contentResource) {
+    private void updatePageProperties(Resource contentResource, Map<String, String> metaData) {
         ModifiableValueMap props = contentResource.adaptTo(ModifiableValueMap.class);
         if (props != null) {
             props.put("jcr:title", "Created via Service");
             props.put("description", "Auto generated page");
+
+            for(Map.Entry<String, String> entry: metaData.entrySet()) {
+                String key = entry.getKey();
+                String value = entry.getValue();
+
+                if(key == null || key.trim().isEmpty() || value == null || value.trim().isEmpty()) {
+                    continue;
+                }
+
+                if(key.equalsIgnoreCase("PageName") || key.equalsIgnoreCase("PageLocation")
+                        || key.equalsIgnoreCase("TemplateLocation")) {
+                    continue;
+                }
+
+                String jcrKey = toCamelCase(key);
+                props.put(jcrKey, value.trim());
+            }
         }
+    }
+
+    private String toCamelCase(String key) {
+        String[] words = key.trim().split("\\s+");
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < words.length; i++) {
+            String word = words[i].replaceAll("[^a-zA-Z0-9]", "");
+            if (word.isEmpty()) continue;
+            if (i == 0) {
+                sb.append(Character.toLowerCase(word.charAt(0)))
+                        .append(word.substring(1));
+            } else {
+                sb.append(Character.toUpperCase(word.charAt(0)))
+                        .append(word.substring(1));
+            }
+        }
+        return sb.toString();
     }
 
     private List<String> extractParagraphs(String html) {
