@@ -17,17 +17,30 @@ import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.Iterator;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 @Component(service = GoogleDocPageCreationService.class)
 public class GoogleDocPageCreationServiceImpl implements GoogleDocPageCreationService {
+
+    private Set<String> boldClasses = new HashSet<>();
+
+    private void extractBoldClasses(String html) {
+        boldClasses.clear();
+        Matcher styleMatcher = Pattern.compile("(?is)<style[^>]*>(.*?)</style>").matcher(html);
+        if (!styleMatcher.find()) return;
+
+        String styleText = styleMatcher.group(1);
+        Matcher classMatcher = Pattern.compile("\\.(c\\d+)[^{]*\\{([^}]*)\\}").matcher(styleText);
+        while (classMatcher.find()) {
+            String className = classMatcher.group(1);
+            String rules = classMatcher.group(2);
+            if (rules.matches("(?i).*font-weight\\s*:\\s*(700|bold).*")) {
+                boldClasses.add(className);
+            }
+        }
+    }
 
     @Override
     public String createPage(ResourceResolver resolver, String fileId) throws Exception {
@@ -113,6 +126,7 @@ public class GoogleDocPageCreationServiceImpl implements GoogleDocPageCreationSe
     }
 
     private List<Map<String, Object>> parseDocToBlocks(String raw) {
+        extractBoldClasses(raw);
         String body = extractBody(raw);
         List<String[]> tokens = tokenizeTopLevelTags(body);
 
@@ -194,12 +208,33 @@ public class GoogleDocPageCreationServiceImpl implements GoogleDocPageCreationSe
         Matcher m = leafPat.matcher(html);
         StringBuilder result = new StringBuilder();
         String lastText = null;
+
         while (m.find()) {
-            String text = m.group(2).replaceAll("&nbsp;", " ").trim();
+            String attrs = m.group(1);
+            String inner = m.group(2);
+            String text = inner.replaceAll("&nbsp;", " ").trim();
+
             if (text.isEmpty() || text.equals(lastText)) {
                 continue;
             }
-            result.append("<span").append(m.group(1)).append(">").append(m.group(2)).append("</span>");
+
+            boolean isBold = false;
+            Matcher classMatcher = Pattern.compile("class=\"([^\"]+)\"").matcher(attrs);
+            if (classMatcher.find()) {
+                for (String cls : classMatcher.group(1).split("\\s+")) {
+                    if (boldClasses.contains(cls)) {
+                        isBold = true;
+                        break;
+                    }
+                }
+            }
+
+            if (isBold) {
+                result.append("<strong>").append(text).append("</strong>");
+            } else {
+                result.append("<span").append(attrs).append(">").append(inner).append("</span>");
+            }
+
             lastText = text;
         }
         return result.toString();
@@ -359,19 +394,24 @@ public class GoogleDocPageCreationServiceImpl implements GoogleDocPageCreationSe
 
     private String buildH1(String title) {
         StringBuilder content = new StringBuilder();
-        Matcher spanMatcher = Pattern.compile("(?is)<span[^>]*>(.*?)</span>").matcher(title);
-        while (spanMatcher.find()) {
-            String spanInner = spanMatcher.group(1);
-            String text = stripTags(spanInner).replaceAll("&nbsp;", " ").trim();
-            if (text.isEmpty()) {
-                continue;
-            }
-            if (Pattern.compile("(?is)<b>").matcher(spanInner).find()) {
-                content.append(" <strong>").append(text).append("</strong>");
+        Pattern pat = Pattern.compile("(?is)(<strong>.*?</strong>|<span[^>]*>.*?</span>|[^<]+)");
+        Matcher m = pat.matcher(title);
+
+        while (m.find()) {
+            String part = m.group(0);
+            if (part.toLowerCase().startsWith("<strong>")) {
+                String text = stripTags(part).replaceAll("&nbsp;", " ").trim();
+                if (!text.isEmpty()) {
+                    content.append(" <strong>").append(text).append("</strong>");
+                }
             } else {
-                content.append(" ").append(text);
+                String text = stripTags(part).replaceAll("&nbsp;", " ").trim();
+                if (!text.isEmpty()) {
+                    content.append(" ").append(text);
+                }
             }
         }
+
         return "<h1>" + content.toString().trim() + "</h1>";
     }
 
